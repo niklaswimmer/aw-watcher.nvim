@@ -1,0 +1,16 @@
+[package]
+name = "aw-watcher-nvim"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+aw-client-rust = { git = "https://github.com/activitywatch/aw-server-rust", version = "0.1.0" }
+chrono = "0.4.22"
+gethostname = "0.2.3"
+lazy_static = "1.4.0"
+nvim-oxi = "0.1"
+serde_json = "1.0.83"
+tokio = { version = "1.20.1", features = ["rt", "macros"], default-features = false }

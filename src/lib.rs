@@ -1,12 +1,15 @@
+mod handler;
+
 use std::{sync::Mutex, thread, time::Instant};
 
 use aw_client_rust::{AwClient, Event};
 use chrono::{Duration, Utc};
+use handler::{start_event_handler, HandlerConfig};
 use gethostname::gethostname;
 use lazy_static::{__Deref, lazy_static};
 use nvim_oxi as oxi;
-use oxi::{opts::CreateAutocmdOpts, types::AutocmdCallbackArgs};
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use oxi::{opts::CreateAutocmdOpts, r#loop, types::AutocmdCallbackArgs};
+use tokio::sync::mpsc::{self, UnboundedSender};
 
 struct Globals {
     connected: bool,
@@ -39,12 +42,21 @@ lazy_static! {
 
 #[oxi::module]
 fn aw_watcher_nvim() -> oxi::Result<()> {
-    let (tx, rx) = mpsc::unbounded_channel::<Event>();
+    let (error_tx, mut error_rx) = mpsc::unbounded_channel();
 
-    let _ = thread::spawn(move || handle_events(rx));
+    let handle = r#loop::new_async(move || {
+        while let Some(err) = error_rx.blocking_recv() {
+            oxi::print!("{err}");
+            GLOBALS.lock().unwrap().connected = false;
+        }
+
+        Ok(())
+    })?;
+
+    let event_tx = start_event_handler(error_tx, handle);
 
     setup_vim_enter()?;
-    setup_heartbeat_sources(&tx)?;
+    setup_heartbeat_sources(event_tx)?;
     setup_start_command()?;
     setup_stop_command()?;
     setup_status_command()?;
@@ -76,8 +88,7 @@ fn start_watcher() -> oxi::Result<()> {
     result
 }
 
-fn setup_heartbeat_sources(tx: &UnboundedSender<Event>) -> oxi::Result<u32> {
-    let tx = tx.clone();
+fn setup_heartbeat_sources(tx: UnboundedSender<(Event, HandlerConfig)>) -> oxi::Result<u32> {
     let opts = CreateAutocmdOpts::builder()
         .callback(move |args| trigger_heartbeat(args, tx.clone()))
         .build();
@@ -94,7 +105,10 @@ fn setup_heartbeat_sources(tx: &UnboundedSender<Event>) -> oxi::Result<u32> {
     )
 }
 
-fn trigger_heartbeat(_: AutocmdCallbackArgs, tx: UnboundedSender<Event>) -> oxi::Result<bool> {
+fn trigger_heartbeat(
+    _: AutocmdCallbackArgs,
+    tx: UnboundedSender<(Event, HandlerConfig)>,
+) -> oxi::Result<bool> {
     let mut globals = if let Ok(globals) = GLOBALS.lock() {
         globals
     } else {
@@ -143,9 +157,7 @@ fn trigger_heartbeat(_: AutocmdCallbackArgs, tx: UnboundedSender<Event>) -> oxi:
         && language == globals.last_language
         && project == globals.last_project;
 
-
-    if data_unchanged
-    {
+    if data_unchanged {
         return Ok(false);
     }
 
@@ -168,8 +180,15 @@ fn trigger_heartbeat(_: AutocmdCallbackArgs, tx: UnboundedSender<Event>) -> oxi:
         },
     };
 
-    tx.send(event)
-        .map_err(|err| nvim_oxi::Error::Other(err.to_string()))?;
+    tx.send((
+        event,
+        HandlerConfig::new(
+            &*AW_CLIENT,
+            &*AW_BUCKET_NAME,
+            30_f64,
+        ),
+    ))
+    .map_err(|err| nvim_oxi::Error::Other(err.to_string()))?;
 
     Ok(false)
 }
@@ -201,18 +220,4 @@ fn setup_status_command() -> oxi::Result<()> {
         },
         None,
     )
-}
-
-#[tokio::main(flavor = "current_thread")]
-async fn handle_events(mut rx: UnboundedReceiver<Event>) {
-    loop {
-        if let Some(event) = rx.recv().await {
-            let result = AW_CLIENT.heartbeat(AW_BUCKET_NAME.deref().as_ref(), &event, 30.0);
-
-            if result.is_err() {
-                println!("{}", result.unwrap_err());
-                GLOBALS.lock().unwrap().connected = false;
-            }
-        }
-    }
 }

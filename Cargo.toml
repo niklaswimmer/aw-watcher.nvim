@@ -11,6 +11,7 @@ aw-client-rust = { git = "https://github.com/activitywatch/aw-server-rust", vers
 chrono = "0.4.22"
 gethostname = "0.2.3"
 lazy_static = "1.4.0"
-nvim-oxi = "0.1"
+nvim-oxi = { git = "https://github.com/noib3/nvim-oxi", version = "0.1.3", features = ["loop"] }
+reqwest = { version = "0.11.11", default-features = false }
 serde_json = "1.0.83"
 tokio = { version = "1.20.1", features = ["rt", "macros"], default-features = false }

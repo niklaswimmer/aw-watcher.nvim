@@ -1,15 +1,21 @@
 mod handler;
 
-use std::{sync::Mutex, thread, time::Instant};
+use std::{convert::Infallible, sync::Mutex, thread, time::Instant};
 
 use aw_client_rust::{AwClient, Event};
 use chrono::{Duration, Utc};
-use handler::{start_event_handler, HandlerConfig};
 use gethostname::gethostname;
+use handler::{start_event_handler, HandlerConfig};
 use lazy_static::{__Deref, lazy_static};
 use nvim_oxi as oxi;
-use oxi::{opts::CreateAutocmdOpts, r#loop, types::AutocmdCallbackArgs};
+use oxi::api::opts::CreateCommandOpts;
+use oxi::{api::opts::CreateAutocmdOpts, api::types::AutocmdCallbackArgs, libuv::AsyncHandle};
 use tokio::sync::mpsc::{self, UnboundedSender};
+
+// make anyhow errors usable as std::error:Error (required by the oxi::module macro)
+#[derive(thiserror::Error, Debug)]
+#[error(transparent)]
+struct Error(#[from] anyhow::Error);
 
 struct Globals {
     connected: bool,
@@ -41,16 +47,25 @@ lazy_static! {
 }
 
 #[oxi::module]
-fn aw_watcher_nvim() -> oxi::Result<()> {
+fn aw_watcher_nvim() -> anyhow::Result<(), crate::Error> {
+    entry()?;
+    Ok(())
+}
+
+// In the above function the ? operator tries to turn errors into crate::Error which only works
+// with anyhow::Error. In this function the ? operator turns everything into an anyhow::Error.
+fn entry() -> anyhow::Result<()> {
     let (error_tx, mut error_rx) = mpsc::unbounded_channel();
 
-    let handle = r#loop::new_async(move || {
+    let handle = AsyncHandle::new(move || {
         while let Some(err) = error_rx.blocking_recv() {
-            oxi::print!("{err}");
+            oxi::schedule(move |_| {
+                oxi::print!("{err}");
+                Ok(())
+            });
             GLOBALS.lock().unwrap().connected = false;
         }
-
-        Ok(())
+        Ok::<(), Infallible>(())
     })?;
 
     let event_tx = start_event_handler(error_tx, handle);
@@ -64,18 +79,18 @@ fn aw_watcher_nvim() -> oxi::Result<()> {
     Ok(())
 }
 
-fn setup_vim_enter() -> oxi::Result<u32> {
+fn setup_vim_enter() -> anyhow::Result<u32> {
     let opts = CreateAutocmdOpts::builder()
         .callback(|_| start_watcher().map(|_| false))
         .build();
 
-    oxi::api::create_autocmd(vec!["VimEnter"], &opts)
+    Ok(oxi::api::create_autocmd(vec!["VimEnter"], &opts)?)
 }
 
-fn start_watcher() -> oxi::Result<()> {
+fn start_watcher() -> anyhow::Result<(), oxi::api::Error> {
     let result = AW_CLIENT
         .create_bucket_simple(AW_BUCKET_NAME.deref(), "app.editor.activity")
-        .map_err(|err| nvim_oxi::Error::Other(err.to_string()));
+        .map_err(|err| nvim_oxi::api::Error::Other(err.to_string()));
 
     // if there was no error, we are connected
     let connected = result.is_ok();
@@ -93,7 +108,7 @@ fn setup_heartbeat_sources(tx: UnboundedSender<(Event, HandlerConfig)>) -> oxi::
         .callback(move |args| trigger_heartbeat(args, tx.clone()))
         .build();
 
-    oxi::api::create_autocmd(
+    Ok(oxi::api::create_autocmd(
         vec![
             "BufEnter",
             "CursorMoved",
@@ -102,7 +117,7 @@ fn setup_heartbeat_sources(tx: UnboundedSender<(Event, HandlerConfig)>) -> oxi::
             "CmdlineChanged",
         ],
         &opts,
-    )
+    )?)
 }
 
 fn trigger_heartbeat(
@@ -133,7 +148,7 @@ fn trigger_heartbeat(
         .get_name()?
         .to_str()
         .ok_or_else(|| {
-            oxi::Error::Other(
+            oxi::api::Error::Other(
                 "error when converting current buffer's path into a string representation"
                     .to_owned(),
             )
@@ -141,10 +156,10 @@ fn trigger_heartbeat(
         .to_owned();
 
     let project = std::env::current_dir()
-        .map_err(|err| oxi::Error::Other(err.to_string()))?
+        .map_err(|err| oxi::api::Error::Other(err.to_string()))?
         .to_str()
         .ok_or_else(|| {
-            oxi::Error::Other(
+            oxi::api::Error::Other(
                 "error when converting current working directory into a string representation"
                     .to_owned(),
             )
@@ -182,34 +197,34 @@ fn trigger_heartbeat(
 
     tx.send((
         event,
-        HandlerConfig::new(
-            &*AW_CLIENT,
-            &*AW_BUCKET_NAME,
-            30_f64,
-        ),
+        HandlerConfig::new(&*AW_CLIENT, &*AW_BUCKET_NAME, 30_f64),
     ))
-    .map_err(|err| nvim_oxi::Error::Other(err.to_string()))?;
+    .map_err(|err| nvim_oxi::api::Error::Other(err.to_string()))?;
 
     Ok(false)
 }
 
 fn setup_start_command() -> oxi::Result<()> {
-    oxi::api::create_user_command("AWStart", |_| start_watcher(), None)
+    Ok(oxi::api::create_user_command(
+        "AWStart",
+        |_| start_watcher(),
+        &CreateCommandOpts::default(),
+    )?)
 }
 
 fn setup_stop_command() -> oxi::Result<()> {
-    oxi::api::create_user_command(
+    Ok(oxi::api::create_user_command(
         "AWStop",
         |_| {
             thread::spawn(|| GLOBALS.lock().unwrap().connected = false);
             Ok(())
         },
-        None,
-    )
+        &CreateCommandOpts::default(),
+    )?)
 }
 
 fn setup_status_command() -> oxi::Result<()> {
-    oxi::api::create_user_command(
+    Ok(oxi::api::create_user_command(
         "AWStatus",
         |_| {
             println!(
@@ -218,6 +233,6 @@ fn setup_status_command() -> oxi::Result<()> {
             );
             Ok(())
         },
-        None,
-    )
+        &CreateCommandOpts::default(),
+    )?)
 }

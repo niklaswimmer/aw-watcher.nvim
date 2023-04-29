@@ -1,15 +1,14 @@
 use aw_client_rust::{AwClient, Event};
-use nvim_oxi::r#loop::AsyncHandle;
+use nvim_oxi::libuv::AsyncHandle;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-pub(crate) struct HandlerConfig{
+pub(crate) struct HandlerConfig {
     client: &'static AwClient,
     bucketname: &'static str,
     pulsetime: f64,
 }
 
 impl HandlerConfig {
-
     pub(crate) fn new(client: &'static AwClient, bucketname: &'static str, pulsetime: f64) -> Self {
         HandlerConfig {
             client,
@@ -36,10 +35,12 @@ pub(crate) fn start_event_handler(
 async fn run_handler(
     mut rx: UnboundedReceiver<(Event, HandlerConfig)>,
     error_channel: UnboundedSender<reqwest::Error>,
-    mut error_handle: AsyncHandle,
+    error_handle: AsyncHandle,
 ) {
     while let Some((event, config)) = rx.recv().await {
-        let result = config.client.heartbeat(config.bucketname, &event, config.pulsetime);
+        let result = config
+            .client
+            .heartbeat(config.bucketname, &event, config.pulsetime);
 
         if let Err(e) = result {
             if error_channel.send(e).is_err() {
@@ -51,4 +52,3 @@ async fn run_handler(
         }
     }
 }
-

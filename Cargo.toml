@@ -7,11 +7,13 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+anyhow = "1.0.71"
 aw-client-rust = { git = "https://github.com/activitywatch/aw-server-rust", version = "0.1.0" }
-chrono = "0.4.22"
-gethostname = "0.2.3"
+chrono = "0.4.24"
+gethostname = "0.4.2"
 lazy_static = "1.4.0"
-nvim-oxi = { git = "https://github.com/noib3/nvim-oxi", version = "0.1.3", features = ["loop"] }
-reqwest = { version = "0.11.11", default-features = false }
-serde_json = "1.0.83"
-tokio = { version = "1.20.1", features = ["rt", "macros"], default-features = false }
+nvim-oxi = { version = "0.3.0", features = ["neovim-0-9", "libuv"]}
+reqwest = { version = "0.11.17", default-features = false }
+serde_json = "1.0.96"
+thiserror = "1.0.40"
+tokio = { version = "1.28.0", features = ["rt", "macros"], default-features = false }
